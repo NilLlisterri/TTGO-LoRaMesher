@@ -8,6 +8,7 @@
         "type_traits": "cpp",
         "utility": "cpp",
         "bitset": "cpp",
-        "initializer_list": "cpp"
+        "initializer_list": "cpp",
+        "new": "cpp"
     }
 }
