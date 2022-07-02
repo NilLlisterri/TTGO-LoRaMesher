@@ -7,6 +7,8 @@
 SoftwareSerial portentaSerial(13, 12); // RX, TX
 LoraMesher& radio = LoraMesher::getInstance();
 
+bool debug = false;
+
 struct dataPacket {
     uint16_t size;
     byte data[];
@@ -15,20 +17,22 @@ struct dataPacket {
 Display display = Display();
 
 void processDataPacket(LoraMesher::userPacket<dataPacket>* packet) {
-    Log.trace(F("Packet arrived from %d with size %d bytes" CR), packet->src, packet->payloadSize);
+    if (debug) Log.trace(F("Packet arrived from %d with size %d bytes" CR), packet->src, packet->payloadSize);
 
     dataPacket* dPacket = packet->payload;
 
-    Serial.println("---- Payload ---- ");
-    Serial.println("Packet size: " + String(dPacket->size));
+    if (debug) Serial.println("---- Payload ---- ");
+    if (debug) Serial.println("Packet size: " + String(dPacket->size));
+    //if (!portentaSerial.availableForWrite()) Serial.
     portentaSerial.write('r');
+    portentaSerial.write(static_cast<byte*>(static_cast<void*>(&packet->src)), 2);
     portentaSerial.write(static_cast<byte*>(static_cast<void*>(&dPacket->size)), 2);
     for(int j = 0; j < dPacket->size; j++) {
-        Serial.println("Byte: " + String(j+1) + ": " + String(dPacket->data[j]));
+        // if (debug) Serial.println("Byte: " + String(j+1) + ": " + String(dPacket->data[j]));
         portentaSerial.write(dPacket->data[j]);
-        delay(5);
+        vTaskDelay(5);
     }
-    Serial.println("---- Payload Done ---- ");
+    if (debug) Serial.println("---- Payload Done ---- ");
 }
 
 
@@ -39,7 +43,7 @@ void processReceivedPackets(void*) {
 
         //Iterate through all the packets inside the Received User Packets FiFo
         while (radio.getReceivedQueueSize() > 0) {
-            Log.trace(F("Received %d packets!" CR), radio.getReceivedQueueSize());
+            if (debug) Log.trace(F("Received %d packets!" CR), radio.getReceivedQueueSize());
             //Get the first element inside the Received User Packets FiFo
             LoraMesher::userPacket<dataPacket>* packet = radio.getNextUserPacket<dataPacket>();
             processDataPacket(packet);
@@ -51,7 +55,7 @@ void processReceivedPackets(void*) {
 
 void printRoutingTable() {
     if (radio.routingTableSize() == 0) {
-        Serial.println("Empty routing table");
+        if (debug) Serial.println("Empty routing table");
     } else {
         for (int i = 0; i < radio.routingTableSize(); i++) {
             LoraMesher::networkNode node = radio.routingTable[i].networkNode;
@@ -70,23 +74,33 @@ void setup() {
     display.print("Id: " + String(radio.getLocalAddress()), 0);
 }
 
+
 void loop() {
     if (portentaSerial.available()) {
         char c = portentaSerial.read();
-        Serial.println("Received command '" + String(c) + "'");
+        if (debug) Serial.println("Received command '" + String(c) + "'");
         if (c == 's') { // Send a message
             if (radio.routingTableSize() == 0) {
-                Serial.println("The routing table is empty!");
+                if (debug) Serial.println("The routing table is empty!");
             } else {
-                while(portentaSerial.available() < 2) { Serial.println("Waiting for size"); delay(100); }
-                byte ref[2];
-                portentaSerial.readBytes(ref, 2);
-                uint16_t bytesAmount;
-                memcpy(&bytesAmount, ref, sizeof(uint16_t));
-                Serial.println(bytesAmount);
-                /*portentaSerial.readBytes((byte*) bytesAmount, 2);*/
+                while(portentaSerial.available() < 2) {
+                    if (debug) Serial.println("Waiting for size");
+                    delay(100); 
+                }
+                
+                byte recipientBytes[2];
+                portentaSerial.readBytes(recipientBytes, 2);
+                uint16_t recipientAddress;
+                memcpy(&recipientAddress, recipientBytes, sizeof(uint16_t));
+                if (debug) Serial.println("Recipient: " + String(recipientAddress));
 
-                Serial.println("Waiting for " + String(bytesAmount) + " bytes");
+                byte amountBytes[2];
+                portentaSerial.readBytes(amountBytes, 2);
+                uint16_t bytesAmount;
+                memcpy(&bytesAmount, amountBytes, sizeof(uint16_t));
+                if (debug) Serial.println("Amount of bytes: " + String(bytesAmount));
+
+                if (debug) Serial.println("Waiting for " + String(bytesAmount) + " bytes");
                 uint32_t payloadSize = bytesAmount * sizeof(byte) + sizeof(dataPacket);
 
                 dataPacket* p = (dataPacket*) malloc(payloadSize);
@@ -94,21 +108,23 @@ void loop() {
 
                 for(int i = 0; i < bytesAmount; i++) {
                     while(!portentaSerial.available()) {}
-                    Serial.println("Byte " + String(i+1) + " read");
+                    if (debug) Serial.println("Byte " + String(i+1) + " read");
                     p->data[i] = portentaSerial.read();
                 }
 
-                Serial.println("Sending a packet of size " + String(payloadSize));
-                LoraMesher::networkNode node = radio.routingTable[0].networkNode;
+                if (debug) Serial.println("Sending a packet of size " + String(payloadSize));
+                // LoraMesher::networkNode node = radio->routingTable[0].networkNode;
                 
-                radio.sendReliablePacket(node.address, (uint8_t*)p, payloadSize);
-                // radio.sendReliable(node.address, p, payloadSize);
+                radio.createPacketAndSend(recipientAddress, (uint8_t*)p, payloadSize);
+                // radio.sendReliable(recipientAddress, p, payloadSize);
             }
         } else if(c == 'r') { // Print the routing table
-            portentaSerial.println(radio.routingTableSize());
-            for (int i = 0; i < radio.routingTableSize(); i++) {
-                LoraMesher::networkNode node = radio.routingTable[i].networkNode;
-                portentaSerial.println(node.address);
+            uint8_t size = radio.routingTableSize();
+            if (debug) Serial.println("Nodes: " + String(size));
+            portentaSerial.write(size);
+            for (int i = 0; i < size; i++) {
+               LoraMesher::networkNode node = radio.routingTable[i].networkNode;
+                portentaSerial.write(static_cast<byte*>(static_cast<void*>(&node.address)), 2);
             }
         } else {
             portentaSerial.println("Command '" + String(c) + "' not recognized");
