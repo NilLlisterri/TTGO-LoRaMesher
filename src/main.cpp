@@ -64,6 +64,18 @@ void printRoutingTable() {
     }
 }
 
+void displayRountingTable(void * pvParameters) {
+    for(;;) {
+        uint8_t size = radio.routingTableSize();
+        String string = String(size) + " Node(s): ";
+        for (int i = 0; i < size; i++) {
+            string += String(radio.routingTable[i].networkNode.address) + " ";
+        }
+        display.print(string, 4);
+        vTaskDelay(1000 / portTICK_PERIOD_MS);
+    }
+}
+
 void setup() {
     Serial.begin(115200);
     portentaSerial.begin(4800);
@@ -71,7 +83,10 @@ void setup() {
     display.initDisplay();
 
     radio.init(processReceivedPackets);
-    display.print("Id: " + String(radio.getLocalAddress()), 0);
+    display.print("Local address: " + String(radio.getLocalAddress()), 0);
+
+    TaskHandle_t xHandle = NULL;
+    xTaskCreate(displayRountingTable, "Update display", 2048, ( void * ) 1, tskIDLE_PRIORITY, &xHandle);
 }
 
 
@@ -127,7 +142,9 @@ void loop() {
                 portentaSerial.write(static_cast<byte*>(static_cast<void*>(&node.address)), 2);
             }
         } else {
-            portentaSerial.println("Command '" + String(c) + "' not recognized");
+            String error = "ERROR: Command '" + String(c) + "' not recognized";
+            portentaSerial.println(error);
+            display.print(error, 2);
         }
     }
 }

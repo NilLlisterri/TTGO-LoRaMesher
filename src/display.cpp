@@ -11,7 +11,6 @@
 #define OLED_SCL 15 
 #define OLED_RST 16
 
-
 class Display {
 public:
     String lines[5] = {"", "", "", "", ""};
@@ -26,7 +25,7 @@ public:
 
         Wire.begin(OLED_SDA, OLED_SCL);
 
-        if(!display.begin(SSD1306_SWITCHCAPVCC, 0x3c, false, false)) { // Address 0x3C for 128x32
+        if (!display.begin(SSD1306_SWITCHCAPVCC, 0x3c, false, false)) { // Address 0x3C for 128x32
             Serial.println(F("SSD1306 allocation failed"));
             for(;;); // Don't proceed, loop forever
         }
@@ -41,7 +40,7 @@ public:
     void print(String string, int line) {
         lines[line] = string;
         display.clearDisplay();
-        for(uint i = 0; i < 5; i++) {
+        for (uint i = 0; i < 5; i++) {
             display.setCursor(0, i*10);
             display.print(lines[i]);
         }
@@ -51,10 +50,5 @@ public:
     void clear() {
         display.clearDisplay();
     }
-    
-private:
 
 };
-
-
-
