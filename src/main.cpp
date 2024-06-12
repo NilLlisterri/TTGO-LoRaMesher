@@ -16,19 +16,15 @@ struct dataPacket {
 
 Display display = Display();
 
-void processDataPacket(LoraMesher::userPacket<dataPacket>* packet) {
-    if (debug) Log.trace(F("Packet arrived from %d with size %d bytes" CR), packet->src, packet->payloadSize);
-
+void processDataPacket(AppPacket<dataPacket>* packet) {
     dataPacket* dPacket = packet->payload;
 
     if (debug) Serial.println("---- Payload ---- ");
     if (debug) Serial.println("Packet size: " + String(dPacket->size));
-    //if (!portentaSerial.availableForWrite()) Serial.
     portentaSerial.write('r');
     portentaSerial.write(static_cast<byte*>(static_cast<void*>(&packet->src)), 2);
     portentaSerial.write(static_cast<byte*>(static_cast<void*>(&dPacket->size)), 2);
     for(int j = 0; j < dPacket->size; j++) {
-        // if (debug) Serial.println("Byte: " + String(j+1) + ": " + String(dPacket->data[j]));
         portentaSerial.write(dPacket->data[j]);
         vTaskDelay(5);
     }
@@ -43,23 +39,9 @@ void processReceivedPackets(void*) {
 
         //Iterate through all the packets inside the Received User Packets FiFo
         while (radio.getReceivedQueueSize() > 0) {
-            if (debug) Log.trace(F("Received %d packets!" CR), radio.getReceivedQueueSize());
-            //Get the first element inside the Received User Packets FiFo
-            LoraMesher::userPacket<dataPacket>* packet = radio.getNextUserPacket<dataPacket>();
+            AppPacket<dataPacket>* packet = radio.getNextAppPacket<dataPacket>();
             processDataPacket(packet);
             radio.deletePacket(packet);
-        }
-    }
-}
-
-
-void printRoutingTable() {
-    if (radio.routingTableSize() == 0) {
-        if (debug) Serial.println("Empty routing table");
-    } else {
-        for (int i = 0; i < radio.routingTableSize(); i++) {
-            LoraMesher::networkNode node = radio.routingTable[i].networkNode;
-            Serial.println("|" + String(node.address) + "(" +String(node.metric)+")->"+String(radio.routingTable[i].via));
         }
     }
 }
@@ -67,14 +49,26 @@ void printRoutingTable() {
 void displayRountingTable(void * pvParameters) {
     for(;;) {
         uint8_t size = radio.routingTableSize();
+        LM_LinkedList<RouteNode>* routingTableList = radio.routingTableListCopy();
         String string = String(size) + " Node(s): ";
         for (int i = 0; i < size; i++) {
-            string += String(radio.routingTable[i].networkNode.address) + " ";
+            RouteNode* rNode = (*routingTableList)[i];
+            NetworkNode node = rNode->networkNode;
+            string += String(node.address) + " ";
         }
         display.print(string, 4);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
+
+TaskHandle_t receiveLoRaMessage_Handle = NULL;
+void createReceiveMessages() {
+    int res = xTaskCreate(processReceivedPackets, "Receive App Task", 4096, (void*) 1, 2, &receiveLoRaMessage_Handle);
+    if (res != pdPASS) {
+        Serial.printf("Error: Receive App Task creation gave error: %d\n", res);
+    }
+}
+
 
 void setup() {
     Serial.begin(115200);
@@ -82,12 +76,30 @@ void setup() {
 
     display.initDisplay();
 
-    radio.init(processReceivedPackets);
+    LoraMesher::LoraMesherConfig config = LoraMesher::LoraMesherConfig();
+
+    //Set the configuration of the LoRaMesher (TTGO T-BEAM v1.1)
+    config.loraCs = 18;
+    config.loraRst = 23;
+    config.loraIrq = 26;
+    config.loraIo1 = 33;
+
+    config.module = LoraMesher::LoraModules::SX1276_MOD;
+
+    //Init the loramesher with a configuration
+    radio.begin(config);
     display.print("Local address: " + String(radio.getLocalAddress()), 0);
+
+    createReceiveMessages();
+
+    radio.setReceiveAppDataTaskHandle(receiveLoRaMessage_Handle);
+    //Start LoRaMesher
+    radio.start();
 
     TaskHandle_t xHandle = NULL;
     xTaskCreate(displayRountingTable, "Update display", 2048, ( void * ) 1, tskIDLE_PRIORITY, &xHandle);
 }
+
 
 
 void loop() {
@@ -128,7 +140,6 @@ void loop() {
                 }
 
                 if (debug) Serial.println("Sending a packet of size " + String(payloadSize));
-                // LoraMesher::networkNode node = radio->routingTable[0].networkNode;
                 
                 radio.createPacketAndSend(recipientAddress, (uint8_t*)p, payloadSize);
                 // radio.sendReliable(recipientAddress, p, payloadSize);
@@ -137,8 +148,10 @@ void loop() {
             uint8_t size = radio.routingTableSize();
             if (debug) Serial.println("Nodes: " + String(size));
             portentaSerial.write(size);
+            LM_LinkedList<RouteNode>* routingTableList = radio.routingTableListCopy();
             for (int i = 0; i < size; i++) {
-               LoraMesher::networkNode node = radio.routingTable[i].networkNode;
+                RouteNode* rNode = (*routingTableList)[i];
+                NetworkNode node = rNode->networkNode;
                 portentaSerial.write(static_cast<byte*>(static_cast<void*>(&node.address)), 2);
             }
         } else {
