@@ -46,7 +46,7 @@ void processReceivedPackets(void*) {
     }
 }
 
-void displayRountingTable(void * pvParameters) {
+void updateDisplay(void * pvParameters) {
     for(;;) {
         uint8_t size = radio.routingTableSize();
         LM_LinkedList<RouteNode>* routingTableList = radio.routingTableListCopy();
@@ -57,6 +57,7 @@ void displayRountingTable(void * pvParameters) {
             string += String(node.address) + " ";
         }
         display.print(string, 4);
+        display.print("Free heap (Kb): " + String(ESP.getFreeHeap()/1024), 3);
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
@@ -86,18 +87,17 @@ void setup() {
 
     config.module = LoraMesher::LoraModules::SX1276_MOD;
 
-    //Init the loramesher with a configuration
     radio.begin(config);
     display.print("Local address: " + String(radio.getLocalAddress()), 0);
 
     createReceiveMessages();
 
     radio.setReceiveAppDataTaskHandle(receiveLoRaMessage_Handle);
-    //Start LoRaMesher
+
     radio.start();
 
     TaskHandle_t xHandle = NULL;
-    xTaskCreate(displayRountingTable, "Update display", 2048, ( void * ) 1, tskIDLE_PRIORITY, &xHandle);
+    xTaskCreate(updateDisplay, "Update display", 2048, ( void * ) 1, tskIDLE_PRIORITY, &xHandle);
 }
 
 
