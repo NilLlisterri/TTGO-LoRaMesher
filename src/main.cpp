@@ -7,7 +7,7 @@
 SoftwareSerial portentaSerial(13, 12); // RX, TX
 LoraMesher& radio = LoraMesher::getInstance();
 
-bool debug = false;
+bool debug = true;
 
 struct dataPacket {
     uint16_t size;
@@ -16,19 +16,44 @@ struct dataPacket {
 
 Display display = Display();
 
+SemaphoreHandle_t portentaSerialSemaphore;
+
+void takeSemaphore() {
+    while (xSemaphoreTake(portentaSerialSemaphore, ( TickType_t ) 100) != pdTRUE) {
+        if (debug) Serial.println("Waiting for semaphore...");
+    }
+}
+
+void giveSemaphore() {
+    xSemaphoreGive(portentaSerialSemaphore);
+}
+
 void processDataPacket(AppPacket<dataPacket>* packet) {
     dataPacket* dPacket = packet->payload;
 
-    if (debug) Serial.println("---- Payload ---- ");
-    if (debug) Serial.println("Packet size: " + String(dPacket->size));
+    if (debug) Serial.println("Received packet, size: " + String(dPacket->size));
+
+    takeSemaphore();
+
     portentaSerial.write('r');
-    portentaSerial.write(static_cast<byte*>(static_cast<void*>(&packet->src)), 2);
-    portentaSerial.write(static_cast<byte*>(static_cast<void*>(&dPacket->size)), 2);
+
+    vTaskDelay(5); // Don't delete this line, otherwise a bit will be randomly switched
+    portentaSerial.write((uint8_t*) &packet->src, 2);
+    if (debug) Serial.println("Sent src " + String(packet->src));
+
+    vTaskDelay(5); // Don't delete this line, otherwise a bit will be randomly switched
+    portentaSerial.write((uint8_t*) &dPacket->size, 2);
+    if (debug) Serial.println("Sent size " + String(dPacket->size));
+
     for(int j = 0; j < dPacket->size; j++) {
         portentaSerial.write(dPacket->data[j]);
+        if (debug) Serial.println("Sent byte " + String(j) + " ("+ String(dPacket->data[j]) +")");
         vTaskDelay(5);
     }
-    if (debug) Serial.println("---- Payload Done ---- ");
+    
+    if (debug) Serial.println("Done!");
+
+    giveSemaphore();
 }
 
 
@@ -56,15 +81,17 @@ void updateDisplay(void * pvParameters) {
             NetworkNode node = rNode->networkNode;
             string += String(node.address) + " ";
         }
+        delete routingTableList;
         display.print(string, 4);
         display.print("Free heap (Kb): " + String(ESP.getFreeHeap()/1024), 3);
+        // if (debug) Serial.println("Free heap (Kb): " + String(ESP.getFreeHeap()/1024));
         vTaskDelay(1000 / portTICK_PERIOD_MS);
     }
 }
 
-TaskHandle_t receiveLoRaMessage_Handle = NULL;
+TaskHandle_t receiveMessageHandle = NULL;
 void createReceiveMessages() {
-    int res = xTaskCreate(processReceivedPackets, "Receive App Task", 4096, (void*) 1, 2, &receiveLoRaMessage_Handle);
+    int res = xTaskCreate(processReceivedPackets, "Receive App Task", 4096, (void*) 1, 2, &receiveMessageHandle);
     if (res != pdPASS) {
         Serial.printf("Error: Receive App Task creation gave error: %d\n", res);
     }
@@ -74,6 +101,15 @@ void createReceiveMessages() {
 void setup() {
     Serial.begin(115200);
     portentaSerial.begin(4800);
+
+    portentaSerialSemaphore = xSemaphoreCreateMutex();
+    if (portentaSerialSemaphore == NULL) {
+        while(true) {
+            Serial.println("The semaphore could not be created!");
+            delay(1000);
+        }
+    }
+    xSemaphoreGive(portentaSerialSemaphore);
 
     display.initDisplay();
 
@@ -92,7 +128,7 @@ void setup() {
 
     createReceiveMessages();
 
-    radio.setReceiveAppDataTaskHandle(receiveLoRaMessage_Handle);
+    radio.setReceiveAppDataTaskHandle(receiveMessageHandle);
 
     radio.start();
 
@@ -104,6 +140,8 @@ void setup() {
 
 void loop() {
     if (portentaSerial.available()) {
+        if (debug) Serial.println("Serial available");
+        takeSemaphore();
         char c = portentaSerial.read();
         if (debug) Serial.println("Received command '" + String(c) + "'");
         if (c == 's') { // Send a message
@@ -135,14 +173,17 @@ void loop() {
 
                 for(int i = 0; i < bytesAmount; i++) {
                     while(!portentaSerial.available()) {}
-                    if (debug) Serial.println("Byte " + String(i+1) + " read");
                     p->data[i] = portentaSerial.read();
+                    if (debug) Serial.println("Byte #" + String(i) + " (" + String(p->data[i]) + ") read");
+                    portentaSerial.write(p->data[i]);
                 }
+
+                portentaSerial.write((uint8_t*) &bytesAmount, 2);
 
                 if (debug) Serial.println("Sending a packet of size " + String(payloadSize));
                 
                 radio.createPacketAndSend(recipientAddress, (uint8_t*)p, payloadSize);
-                // radio.sendReliable(recipientAddress, p, payloadSize);
+                // radio.sendReliable(recipientAddress, (uint8_t*)p, payloadSize);
             }
         } else if(c == 'r') { // Print the routing table
             uint8_t size = radio.routingTableSize();
@@ -152,12 +193,21 @@ void loop() {
             for (int i = 0; i < size; i++) {
                 RouteNode* rNode = (*routingTableList)[i];
                 NetworkNode node = rNode->networkNode;
-                portentaSerial.write(static_cast<byte*>(static_cast<void*>(&node.address)), 2);
+                portentaSerial.write((uint8_t*) &node.address, 2);
             }
+            delete routingTableList;
         } else {
-            String error = "ERROR: Command '" + String(c) + "' not recognized";
-            portentaSerial.println(error);
+            String error = "ERROR: CMD '" + String(c) + "' unrecognized. Rest: ";
+            while (portentaSerial.available()) {
+                error += portentaSerial.read();
+            }
+            // portentaSerial.println(error);
             display.print(error, 2);
+            while(true) {
+                delay(1000);
+                Serial.println(error);
+            }
         }
+        giveSemaphore();
     }
 }
