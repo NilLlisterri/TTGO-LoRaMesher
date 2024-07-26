@@ -176,6 +176,7 @@ void loop() {
                     p->data[i] = portentaSerial.read();
                     if (debug) Serial.println("Byte #" + String(i) + " (" + String(p->data[i]) + ") read");
                     portentaSerial.write(p->data[i]);
+                    vTaskDelay(5);
                 }
 
                 portentaSerial.write((uint8_t*) &bytesAmount, 2);
