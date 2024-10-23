@@ -4,6 +4,8 @@
 #include "WString.h"
 #include "SoftwareSerial.h"
 
+#define STATUS_LINE 5
+
 SoftwareSerial portentaSerial(13, 12); // RX, TX
 LoraMesher& radio = LoraMesher::getInstance();
 
@@ -17,6 +19,8 @@ struct dataPacket {
 Display display = Display();
 
 SemaphoreHandle_t portentaSerialSemaphore;
+
+int statusMillis = 0;
 
 void takeSemaphore() {
     while (xSemaphoreTake(portentaSerialSemaphore, ( TickType_t ) 100) != pdTRUE) {
@@ -56,6 +60,10 @@ void processDataPacket(AppPacket<dataPacket>* packet) {
     giveSemaphore();
 }
 
+void printStatus(String status) {
+    statusMillis = millis();
+    display.print(status, STATUS_LINE);
+}
 
 void processReceivedPackets(void*) {
     for (;;) {
@@ -67,25 +75,35 @@ void processReceivedPackets(void*) {
             AppPacket<dataPacket>* packet = radio.getNextAppPacket<dataPacket>();
             processDataPacket(packet);
             radio.deletePacket(packet);
+
+            printStatus("MESSAGE RECEIVED!");
         }
     }
 }
+
 
 void updateDisplay(void * pvParameters) {
     for(;;) {
         uint8_t size = radio.routingTableSize();
         LM_LinkedList<RouteNode>* routingTableList = radio.routingTableListCopy();
-        String string = String(size) + " Node(s): ";
+        display.print(String(size) + " NODES IN REACH: ", 1);
+        String nodes_string = "";
         for (int i = 0; i < size; i++) {
             RouteNode* rNode = (*routingTableList)[i];
             NetworkNode node = rNode->networkNode;
-            string += String(node.address) + " ";
+            nodes_string += String(node.address);
+            if (i < size - 1) nodes_string += ", ";
         }
         delete routingTableList;
-        display.print(string, 4);
-        display.print("Free heap (Kb): " + String(ESP.getFreeHeap()/1024), 3);
-        // if (debug) Serial.println("Free heap (Kb): " + String(ESP.getFreeHeap()/1024));
-        vTaskDelay(1000 / portTICK_PERIOD_MS);
+        display.print(nodes_string, 2);
+        
+        display.print("FREE HEAP: " + String(ESP.getFreeHeap()/1024) + "Kb", 3);
+
+        if (millis() > statusMillis + 1000) {
+            display.print("", STATUS_LINE);
+        }
+
+        vTaskDelay(500 / portTICK_PERIOD_MS);
     }
 }
 
@@ -124,7 +142,7 @@ void setup() {
     config.module = LoraMesher::LoraModules::SX1276_MOD;
 
     radio.begin(config);
-    display.print("Local address: " + String(radio.getLocalAddress()), 0);
+    display.print("LOCAL ADDRESS: " + String(radio.getLocalAddress()), 0);
 
     createReceiveMessages();
 
@@ -152,6 +170,8 @@ void loop() {
                     if (debug) Serial.println("Waiting for size");
                     delay(100); 
                 }
+
+                printStatus("SENDING MESSAGE...");
                 
                 byte recipientBytes[2];
                 portentaSerial.readBytes(recipientBytes, 2);
@@ -184,7 +204,8 @@ void loop() {
                 if (debug) Serial.println("Sending a packet of size " + String(payloadSize));
                 
                 radio.createPacketAndSend(recipientAddress, (uint8_t*)p, payloadSize);
-                // radio.sendReliable(recipientAddress, (uint8_t*)p, payloadSize);
+                
+                printStatus("MESSAGE SENT!");
             }
         } else if(c == 'r') { // Print the routing table
             uint8_t size = radio.routingTableSize();
@@ -202,8 +223,7 @@ void loop() {
             while (portentaSerial.available()) {
                 error += portentaSerial.read();
             }
-            // portentaSerial.println(error);
-            display.print(error, 2);
+            display.print(error, 4);
             while(true) {
                 delay(1000);
                 Serial.println(error);
@@ -211,4 +231,5 @@ void loop() {
         }
         giveSemaphore();
     }
+
 }

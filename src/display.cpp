@@ -7,10 +7,11 @@
 
 #define SCREEN_WIDTH 128 // OLED display width, in pixels
 #define SCREEN_HEIGHT 64 // OLED display height, in pixels
+#define LINE_COUNT 6
 
 class Display {
 public:
-    String lines[5] = {"", "", "", "", ""};
+    String lines[LINE_COUNT] = {"", "", "", "", "", ""};
     Adafruit_SSD1306 display = Adafruit_SSD1306(SCREEN_WIDTH, SCREEN_HEIGHT, &Wire, DISPLAY_RST);
     Display() {}
 
@@ -37,7 +38,7 @@ public:
     void print(String string, int line) {
         lines[line] = string;
         display.clearDisplay();
-        for (uint i = 0; i < 5; i++) {
+        for (uint i = 0; i < LINE_COUNT; i++) {
             display.setCursor(0, i*10);
             display.print(lines[i]);
         }
