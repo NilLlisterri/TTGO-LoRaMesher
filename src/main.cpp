@@ -6,7 +6,14 @@
 
 #define STATUS_LINE 5
 
+#ifdef T_BEAM_LORA_32
 SoftwareSerial portentaSerial(13, 12); // RX, TX
+#endif
+
+#ifdef T_BEAM_V10
+SoftwareSerial portentaSerial(33, 32); // RX, TX
+#endif
+
 LoraMesher& radio = LoraMesher::getInstance();
 
 bool debug = true;
@@ -60,8 +67,8 @@ void processDataPacket(AppPacket<dataPacket>* packet) {
     giveSemaphore();
 }
 
-void printStatus(String status) {
-    statusMillis = millis();
+void printStatus(String status, int duration_millis) {
+    statusMillis = millis() + duration_millis;
     display.print(status, STATUS_LINE);
 }
 
@@ -76,7 +83,7 @@ void processReceivedPackets(void*) {
             processDataPacket(packet);
             radio.deletePacket(packet);
 
-            printStatus("MESSAGE RECEIVED!");
+            printStatus("MESSAGE RECEIVED!", 1000);
         }
     }
 }
@@ -99,7 +106,7 @@ void updateDisplay(void * pvParameters) {
         
         display.print("FREE HEAP: " + String(ESP.getFreeHeap()/1024) + "Kb", 3);
 
-        if (millis() > statusMillis + 1000) {
+        if (millis() > statusMillis) {
             display.print("", STATUS_LINE);
         }
 
@@ -166,12 +173,12 @@ void loop() {
             if (radio.routingTableSize() == 0) {
                 if (debug) Serial.println("The routing table is empty!");
             } else {
+                printStatus("SENDING MESSAGE...", 5000);
+
                 while(portentaSerial.available() < 2) {
                     if (debug) Serial.println("Waiting for size");
                     delay(100); 
                 }
-
-                printStatus("SENDING MESSAGE...");
                 
                 byte recipientBytes[2];
                 portentaSerial.readBytes(recipientBytes, 2);
@@ -205,7 +212,7 @@ void loop() {
                 
                 radio.createPacketAndSend(recipientAddress, (uint8_t*)p, payloadSize);
                 
-                printStatus("MESSAGE SENT!");
+                printStatus("MESSAGE SENT!", 1000);
             }
         } else if(c == 'r') { // Print the routing table
             uint8_t size = radio.routingTableSize();
