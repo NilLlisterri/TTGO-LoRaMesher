@@ -14,6 +14,17 @@ SoftwareSerial portentaSerial(13, 12); // RX, TX
 SoftwareSerial portentaSerial(33, 32); // RX, TX
 #endif
 
+// Change to this in LoraMesher.cpp to force a topology
+// bool LoraMesher::canReceivePacket(uint16_t source) {
+//     uint16_t local_addr = getLocalAddress();
+//     if (local_addr == 2120) {
+//        if (source == 22652) return true; 
+//     } else if (local_addr == 22652) {
+//        if (source == 2120) return true;
+//     }
+//     return false;
+// }
+
 LoraMesher& radio = LoraMesher::getInstance();
 
 bool debug = true;
