@@ -14,6 +14,11 @@ SoftwareSerial portentaSerial(13, 12); // RX, TX
 SoftwareSerial portentaSerial(33, 32); // RX, TX
 #endif
 
+const char COMMAND_SEND_MESSAGE = 's';
+const char COMMAND_GET_ROUTING_TABLE = 'r';
+
+const char COMMAND_MESSAGE_RECEIVED = 'r';
+
 // Change to this in LoraMesher.cpp to force a topology
 // bool LoraMesher::canReceivePacket(uint16_t source) {
 //     uint16_t local_addr = getLocalAddress();
@@ -57,7 +62,7 @@ void processDataPacket(AppPacket<dataPacket>* packet) {
 
     takeSemaphore();
 
-    portentaSerial.write('r');
+    portentaSerial.write(COMMAND_MESSAGE_RECEIVED);
 
     vTaskDelay(5); // Don't delete this line, otherwise a bit will be randomly switched
     portentaSerial.write((uint8_t*) &packet->src, 2);
@@ -172,6 +177,62 @@ void setup() {
     xTaskCreate(updateDisplay, "Update display", 2048, ( void * ) 1, tskIDLE_PRIORITY, &xHandle);
 }
 
+void printRoutingTableToSerial() {
+    uint8_t size = radio.routingTableSize();
+    if (debug) Serial.println("Nodes: " + String(size));
+    portentaSerial.write(size);
+    LM_LinkedList<RouteNode>* routingTableList = radio.routingTableListCopy();
+    for (int i = 0; i < size; i++) {
+        RouteNode* rNode = (*routingTableList)[i];
+        NetworkNode node = rNode->networkNode;
+        portentaSerial.write((uint8_t*) &node.address, 2);
+        portentaSerial.write((uint8_t*) &node.metric, 1);
+    }
+    delete routingTableList;
+}
+
+void sendMessage() {
+    printStatus("SENDING MESSAGE...", 5000);
+
+    while(portentaSerial.available() < 2) {
+        if (debug) Serial.println("Waiting for size");
+        delay(100); 
+    }
+    
+    byte recipientBytes[2];
+    portentaSerial.readBytes(recipientBytes, 2);
+    uint16_t recipientAddress;
+    memcpy(&recipientAddress, recipientBytes, sizeof(uint16_t));
+    if (debug) Serial.println("Recipient: " + String(recipientAddress));
+
+    byte amountBytes[2];
+    portentaSerial.readBytes(amountBytes, 2);
+    uint16_t bytesAmount;
+    memcpy(&bytesAmount, amountBytes, sizeof(uint16_t));
+    if (debug) Serial.println("Amount of bytes: " + String(bytesAmount));
+
+    if (debug) Serial.println("Waiting for " + String(bytesAmount) + " bytes");
+    uint32_t payloadSize = bytesAmount * sizeof(byte) + sizeof(dataPacket);
+
+    dataPacket* p = (dataPacket*) malloc(payloadSize);
+    p->size = bytesAmount;
+
+    for(int i = 0; i < bytesAmount; i++) {
+        while(!portentaSerial.available()) {}
+        p->data[i] = portentaSerial.read();
+        if (debug) Serial.println("Byte #" + String(i) + " (" + String(p->data[i]) + ") read");
+        portentaSerial.write(p->data[i]);
+        vTaskDelay(5);
+    }
+
+    portentaSerial.write((uint8_t*) &bytesAmount, 2);
+
+    if (debug) Serial.println("Sending a packet of size " + String(payloadSize));
+    
+    radio.createPacketAndSend(recipientAddress, (uint8_t*)p, payloadSize);
+    
+    printStatus("MESSAGE SENT!", 1000);
+}
 
 
 void loop() {
@@ -180,62 +241,14 @@ void loop() {
         takeSemaphore();
         char c = portentaSerial.read();
         if (debug) Serial.println("Received command '" + String(c) + "'");
-        if (c == 's') { // Send a message
+        if (c == COMMAND_SEND_MESSAGE) { // Send a message
             if (radio.routingTableSize() == 0) {
                 if (debug) Serial.println("The routing table is empty!");
             } else {
-                printStatus("SENDING MESSAGE...", 5000);
-
-                while(portentaSerial.available() < 2) {
-                    if (debug) Serial.println("Waiting for size");
-                    delay(100); 
-                }
-                
-                byte recipientBytes[2];
-                portentaSerial.readBytes(recipientBytes, 2);
-                uint16_t recipientAddress;
-                memcpy(&recipientAddress, recipientBytes, sizeof(uint16_t));
-                if (debug) Serial.println("Recipient: " + String(recipientAddress));
-
-                byte amountBytes[2];
-                portentaSerial.readBytes(amountBytes, 2);
-                uint16_t bytesAmount;
-                memcpy(&bytesAmount, amountBytes, sizeof(uint16_t));
-                if (debug) Serial.println("Amount of bytes: " + String(bytesAmount));
-
-                if (debug) Serial.println("Waiting for " + String(bytesAmount) + " bytes");
-                uint32_t payloadSize = bytesAmount * sizeof(byte) + sizeof(dataPacket);
-
-                dataPacket* p = (dataPacket*) malloc(payloadSize);
-                p->size = bytesAmount;
-
-                for(int i = 0; i < bytesAmount; i++) {
-                    while(!portentaSerial.available()) {}
-                    p->data[i] = portentaSerial.read();
-                    if (debug) Serial.println("Byte #" + String(i) + " (" + String(p->data[i]) + ") read");
-                    portentaSerial.write(p->data[i]);
-                    vTaskDelay(5);
-                }
-
-                portentaSerial.write((uint8_t*) &bytesAmount, 2);
-
-                if (debug) Serial.println("Sending a packet of size " + String(payloadSize));
-                
-                radio.createPacketAndSend(recipientAddress, (uint8_t*)p, payloadSize);
-                
-                printStatus("MESSAGE SENT!", 1000);
+                sendMessage();
             }
-        } else if(c == 'r') { // Print the routing table
-            uint8_t size = radio.routingTableSize();
-            if (debug) Serial.println("Nodes: " + String(size));
-            portentaSerial.write(size);
-            LM_LinkedList<RouteNode>* routingTableList = radio.routingTableListCopy();
-            for (int i = 0; i < size; i++) {
-                RouteNode* rNode = (*routingTableList)[i];
-                NetworkNode node = rNode->networkNode;
-                portentaSerial.write((uint8_t*) &node.address, 2);
-            }
-            delete routingTableList;
+        } else if(c == COMMAND_GET_ROUTING_TABLE) { // Print the routing table
+            printRoutingTableToSerial();
         } else {
             String error = "ERROR: CMD '" + String(c) + "' unrecognized. Rest: ";
             while (portentaSerial.available()) {
